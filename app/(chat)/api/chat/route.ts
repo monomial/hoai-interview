@@ -25,6 +25,7 @@ import { createDocument } from '@/lib/ai/tools/create-document';
 import { updateDocument } from '@/lib/ai/tools/update-document';
 import { requestSuggestions } from '@/lib/ai/tools/request-suggestions';
 import { getWeather } from '@/lib/ai/tools/get-weather';
+import { processInvoice } from '@/lib/ai/tools/process-invoice';
 
 export const maxDuration = 60;
 
@@ -59,21 +60,31 @@ export async function POST(request: Request) {
     messages: [{ ...userMessage, createdAt: new Date(), chatId: id }],
   });
 
+  // Check if the user is asking to process an invoice
+  const isProcessingInvoice = userMessage.content.toLowerCase().includes('process this invoice') || 
+                             userMessage.content.toLowerCase().includes('process invoice');
+
+  // Use the default chat model if processing an invoice
+  const modelToUse = selectedChatModel;
+
+  console.log(`Using model: ${modelToUse} for chat. Processing invoice: ${isProcessingInvoice}`);
+
   return createDataStreamResponse({
     execute: (dataStream) => {
       const result = streamText({
-        model: myProvider.languageModel(selectedChatModel),
-        system: systemPrompt({ selectedChatModel }),
+        model: myProvider.languageModel(modelToUse),
+        system: systemPrompt({ selectedChatModel: modelToUse }),
         messages,
         maxSteps: 5,
         experimental_activeTools:
-          selectedChatModel === 'chat-model-reasoning'
+          modelToUse === 'chat-model-reasoning'
             ? []
             : [
                 'getWeather',
                 'createDocument',
                 'updateDocument',
                 'requestSuggestions',
+                'processInvoice',
               ],
         experimental_transform: smoothStream({ chunking: 'word' }),
         experimental_generateMessageId: generateUUID,
@@ -85,6 +96,7 @@ export async function POST(request: Request) {
             session,
             dataStream,
           }),
+          processInvoice,
         },
         onFinish: async ({ response, reasoning }) => {
           if (session.user?.id) {
@@ -106,7 +118,7 @@ export async function POST(request: Request) {
                 }),
               });
             } catch (error) {
-              console.error('Failed to save chat');
+              console.error('Failed to save chat', error);
             }
           }
         },
@@ -120,8 +132,24 @@ export async function POST(request: Request) {
         sendReasoning: true,
       });
     },
-    onError: () => {
-      return 'Oops, an error occured!';
+    onError: (error) => {
+      console.error('Error in chat API:', error);
+      
+      // Provide more detailed error message
+      let errorMessage = 'Oops, an error occurred!';
+      
+      if (error instanceof Error) {
+        errorMessage = `Error: ${error.message}`;
+        
+        // Log the full error for debugging
+        console.error('Full error details:', {
+          name: error.name,
+          message: error.message,
+          stack: error.stack,
+        });
+      }
+      
+      return errorMessage;
     },
   });
 }

@@ -1,12 +1,19 @@
 {
-  "version": "7",
+  "version": "5",
   "dialect": "sqlite",
   "entries": [
     {
       "idx": 0,
-      "version": "6",
-      "when": 1739483549686,
+      "version": "5",
+      "when": 1710302400000,
       "tag": "0000_perfect_dracula",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1710302500000,
+      "tag": "0001_invoice_tables",
       "breakpoints": true
     }
   ]

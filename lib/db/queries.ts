@@ -6,6 +6,8 @@ import Database from 'better-sqlite3';
 import {
   chat,
   document,
+  invoice,
+  lineItem,
   type Suggestion,
   suggestion,
   type Message,
@@ -13,6 +15,7 @@ import {
   vote,
 } from './schema';
 import type { BlockKind } from '@/components/block';
+import { generateUUID } from '../utils';
 
 // Optionally, if not using email/pass login, you can
 // use the Drizzle adapter for Auth.js / NextAuth
@@ -319,4 +322,178 @@ export async function updateChatVisiblityById({
     console.error('Failed to update chat visibility in database');
     throw error;
   }
+}
+
+// Invoice queries
+export async function saveInvoice({
+  customerName,
+  vendorName,
+  invoiceNumber,
+  invoiceDate,
+  dueDate,
+  amount,
+  filePath,
+}: {
+  customerName: string;
+  vendorName: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  dueDate?: string;
+  amount: number;
+  filePath?: string;
+}) {
+  const id = generateUUID();
+  const createdAt = new Date();
+
+  await db.insert(invoice).values({
+    id,
+    customerName,
+    vendorName,
+    invoiceNumber,
+    invoiceDate,
+    dueDate,
+    amount,
+    filePath,
+    createdAt,
+  });
+
+  return { id };
+}
+
+export async function saveLineItems({
+  invoiceId,
+  items,
+}: {
+  invoiceId: string;
+  items: Array<{
+    description: string;
+    quantity?: number;
+    unitPrice?: number;
+    total: number;
+  }>;
+}) {
+  const createdAt = new Date();
+
+  for (const item of items) {
+    await db.insert(lineItem).values({
+      id: generateUUID(),
+      invoiceId,
+      description: item.description,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      total: item.total,
+      createdAt,
+    });
+  }
+}
+
+export async function getInvoices() {
+  const invoices = await db.select().from(invoice).orderBy(desc(invoice.createdAt));
+  
+  // Fetch line items for each invoice
+  const result = [];
+  for (const inv of invoices) {
+    const items = await db
+      .select()
+      .from(lineItem)
+      .where(eq(lineItem.invoiceId, inv.id));
+    
+    result.push({
+      ...inv,
+      lineItems: items
+    });
+  }
+  
+  return result;
+}
+
+export async function getInvoiceById({ id }: { id: string }) {
+  const invoiceData = await db
+    .select()
+    .from(invoice)
+    .where(eq(invoice.id, id))
+    .get();
+
+  if (!invoiceData) {
+    return null;
+  }
+
+  const lineItems = await db
+    .select()
+    .from(lineItem)
+    .where(eq(lineItem.invoiceId, id));
+
+  return {
+    ...invoiceData,
+    lineItems,
+  };
+}
+
+export async function updateInvoice({
+  id,
+  customerName,
+  vendorName,
+  invoiceNumber,
+  invoiceDate,
+  dueDate,
+  amount,
+}: {
+  id: string;
+  customerName: string;
+  vendorName: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  dueDate?: string;
+  amount: number;
+}) {
+  await db
+    .update(invoice)
+    .set({
+      customerName,
+      vendorName,
+      invoiceNumber,
+      invoiceDate,
+      dueDate,
+      amount,
+    })
+    .where(eq(invoice.id, id));
+}
+
+export async function deleteInvoiceById({ id }: { id: string }) {
+  // First delete line items
+  await db.delete(lineItem).where(eq(lineItem.invoiceId, id));
+  
+  // Then delete invoice
+  await db.delete(invoice).where(eq(invoice.id, id));
+}
+
+export async function findInvoiceByInvoiceNumber({ invoiceNumber }: { invoiceNumber: string }) {
+  return db
+    .select()
+    .from(invoice)
+    .where(eq(invoice.invoiceNumber, invoiceNumber))
+    .get();
+}
+
+export async function findDuplicateInvoice({ 
+  invoiceNumber, 
+  vendorName 
+}: { 
+  invoiceNumber: string;
+  vendorName: string;
+}) {
+  return db
+    .select()
+    .from(invoice)
+    .where(
+      and(
+        eq(invoice.invoiceNumber, invoiceNumber),
+        eq(invoice.vendorName, vendorName)
+      )
+    )
+    .get();
+}
+
+export async function deleteLineItemsByInvoiceId({ invoiceId }: { invoiceId: string }) {
+  await db.delete(lineItem).where(eq(lineItem.invoiceId, invoiceId));
 }

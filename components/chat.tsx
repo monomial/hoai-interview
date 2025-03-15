@@ -50,7 +50,35 @@ export function Chat({
       mutate('/api/history');
     },
     onError: (error) => {
-      toast.error('An error occured, please try again!');
+      console.error('Chat error:', error);
+      
+      // Display a more detailed error message
+      let errorMessage = 'An error occurred, please try again!';
+      
+      if (typeof error === 'string') {
+        // If the error is a string, display it directly
+        errorMessage = error;
+      } else if (error instanceof Error) {
+        // If it's an Error object, use its message
+        errorMessage = `Error: ${error.message}`;
+      }
+      
+      // Show the error message to the user
+      toast.error(errorMessage, {
+        duration: 5000,
+        position: 'bottom-center',
+      });
+      
+      // Also append the error as a system message so it's visible in the chat
+      setMessages((messages) => [
+        ...messages,
+        {
+          id: generateUUID(),
+          role: 'system',
+          content: `⚠️ ${errorMessage}`,
+          createdAt: new Date(),
+        },
+      ]);
     },
   });
 

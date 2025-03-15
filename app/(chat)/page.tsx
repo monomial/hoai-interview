@@ -14,6 +14,21 @@ export default async function Page() {
   if (!modelIdFromCookie) {
     return (
       <>
+        <div className="mb-8 p-4 bg-muted rounded-lg">
+          <h2 className="text-xl font-semibold mb-2">Invoice Processing AI</h2>
+          <p className="mb-4">
+            Upload and process vendor invoices using AI to automatically extract key information.
+          </p>
+          <div className="text-sm">
+            <p className="font-medium mb-1">How to use:</p>
+            <ol className="list-decimal pl-5 space-y-1">
+              <li>Upload an invoice PDF or image using the attachment button below</li>
+              <li>Ask the AI to "Process this invoice"</li>
+              <li>The AI will extract and validate the invoice information</li>
+              <li>View and manage all processed invoices in the <strong>Invoices</strong> page</li>
+            </ol>
+          </div>
+        </div>
         <Chat
           key={id}
           id={id}
@@ -29,6 +44,21 @@ export default async function Page() {
 
   return (
     <>
+      <div className="mb-8 p-4 bg-muted rounded-lg">
+        <h2 className="text-xl font-semibold mb-2">Invoice Processing AI</h2>
+        <p className="mb-4">
+          Upload and process vendor invoices using AI to automatically extract key information.
+        </p>
+        <div className="text-sm">
+          <p className="font-medium mb-1">How to use:</p>
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Upload an invoice PDF or image using the attachment button below</li>
+            <li>Ask the AI to "Process this invoice"</li>
+            <li>The AI will extract and validate the invoice information</li>
+            <li>View and manage all processed invoices in the <strong>Invoices</strong> page</li>
+          </ol>
+        </div>
+      </div>
       <Chat
         key={id}
         id={id}
