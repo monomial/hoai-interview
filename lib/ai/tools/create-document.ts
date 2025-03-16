@@ -18,6 +18,14 @@ export const createDocument = ({ session, dataStream }: CreateDocumentProps) =>
       kind: z.enum(blockKinds),
     }),
     execute: async ({ title, kind }) => {
+      console.log(`[DEBUG] createDocument tool called with title: "${title}", kind: "${kind}"`);
+      
+      // Special debug for invoice processing
+      if (kind === 'invoice') {
+        console.log('[DEBUG] *** INVOICE BLOCK CREATION REQUESTED! ***');
+        console.log('[DEBUG] This log should appear when the AI calls createDocument with kind="invoice"');
+      }
+      
       const id = generateUUID();
 
       dataStream.writeData({
@@ -46,8 +54,11 @@ export const createDocument = ({ session, dataStream }: CreateDocumentProps) =>
       );
 
       if (!documentHandler) {
+        console.error(`[DEBUG] No document handler found for kind: ${kind}`);
         throw new Error(`No document handler found for kind: ${kind}`);
       }
+      
+      console.log(`[DEBUG] Found document handler for kind: ${kind}, proceeding with creation`);
 
       await documentHandler.onCreateDocument({
         id,
@@ -57,6 +68,7 @@ export const createDocument = ({ session, dataStream }: CreateDocumentProps) =>
       });
 
       dataStream.writeData({ type: 'finish', content: '' });
+      console.log(`[DEBUG] Document creation completed for id: ${id}`);
 
       return {
         id,

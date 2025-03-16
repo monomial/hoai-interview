@@ -30,6 +30,8 @@ import { processInvoice } from '@/lib/ai/tools/process-invoice';
 export const maxDuration = 60;
 
 export async function POST(request: Request) {
+  console.log('[DEBUG] POST /api/chat called');
+  
   const {
     id,
     messages,
@@ -37,21 +39,38 @@ export async function POST(request: Request) {
   }: { id: string; messages: Array<Message>; selectedChatModel: string } =
     await request.json();
 
+  console.log(`[DEBUG] Chat ID: ${id}, Selected model: ${selectedChatModel}`);
+  
   const session = await auth();
 
   if (!session || !session.user || !session.user.id) {
+    console.log('[DEBUG] Unauthorized request to chat API');
     return new Response('Unauthorized', { status: 401 });
   }
 
   const userMessage = getMostRecentUserMessage(messages);
 
   if (!userMessage) {
+    console.log('[DEBUG] No user message found');
     return new Response('No user message found', { status: 400 });
+  }
+
+  console.log(`[DEBUG] User message: "${typeof userMessage.content === 'string' ? userMessage.content : 'Non-string content'}"`);
+  
+  // Check for attachments
+  const hasAttachments = userMessage.content && typeof userMessage.content !== 'string';
+  if (hasAttachments) {
+    console.log('[DEBUG] Message has attachments');
+    const attachments = (userMessage.content as any).attachments || [];
+    attachments.forEach((attachment: any, index: number) => {
+      console.log(`[DEBUG] Attachment ${index + 1}: type=${attachment.type}, name=${attachment.name || 'unnamed'}`);
+    });
   }
 
   const chat = await getChatById({ id });
 
   if (!chat) {
+    console.log('[DEBUG] Creating new chat');
     const title = await generateTitleFromUserMessage({ message: userMessage });
     await saveChat({ id, userId: session.user.id, title });
   }
@@ -61,16 +80,34 @@ export async function POST(request: Request) {
   });
 
   // Check if the user is asking to process an invoice
-  const isProcessingInvoice = userMessage.content.toLowerCase().includes('process this invoice') || 
-                             userMessage.content.toLowerCase().includes('process invoice');
+  const isProcessingInvoice = typeof userMessage.content === 'string' && 
+                             (userMessage.content.toLowerCase().includes('process this invoice') || 
+                             userMessage.content.toLowerCase().includes('process invoice'));
+
+  console.log(`[DEBUG] Is processing invoice: ${isProcessingInvoice}`);
+  
+  // If processing an invoice and has attachments, we should use the invoice block
+  if (isProcessingInvoice && hasAttachments) {
+    console.log('[DEBUG] Should use invoice block for this request - AI should call createDocument with kind: "invoice"');
+    
+    // Log attachment details for debugging
+    if (typeof userMessage.content !== 'string') {
+      const attachments = (userMessage.content as any).attachments || [];
+      attachments.forEach((attachment: any, index: number) => {
+        console.log(`[DEBUG] Invoice attachment ${index + 1}: type=${attachment.type}, name=${attachment.name || 'unnamed'}`);
+      });
+    }
+  }
 
   // Use the default chat model if processing an invoice
   const modelToUse = selectedChatModel;
 
-  console.log(`Using model: ${modelToUse} for chat. Processing invoice: ${isProcessingInvoice}`);
+  console.log(`[DEBUG] Using model: ${modelToUse} for chat. Processing invoice: ${isProcessingInvoice}`);
 
   return createDataStreamResponse({
     execute: (dataStream) => {
+      console.log('[DEBUG] Starting stream execution');
+      
       const result = streamText({
         model: myProvider.languageModel(modelToUse),
         system: systemPrompt({ selectedChatModel: modelToUse }),
@@ -99,6 +136,8 @@ export async function POST(request: Request) {
           processInvoice,
         },
         onFinish: async ({ response, reasoning }) => {
+          console.log('[DEBUG] Stream finished');
+          
           if (session.user?.id) {
             try {
               const sanitizedResponseMessages = sanitizeResponseMessages({
@@ -117,8 +156,10 @@ export async function POST(request: Request) {
                   };
                 }),
               });
+              
+              console.log('[DEBUG] Messages saved successfully');
             } catch (error) {
-              console.error('Failed to save chat', error);
+              console.error('[DEBUG] Failed to save chat', error);
             }
           }
         },
@@ -133,7 +174,7 @@ export async function POST(request: Request) {
       });
     },
     onError: (error) => {
-      console.error('Error in chat API:', error);
+      console.error('[DEBUG] Error in chat API:', error);
       
       // Provide more detailed error message
       let errorMessage = 'Oops, an error occurred!';
@@ -142,7 +183,7 @@ export async function POST(request: Request) {
         errorMessage = `Error: ${error.message}`;
         
         // Log the full error for debugging
-        console.error('Full error details:', {
+        console.error('[DEBUG] Full error details:', {
           name: error.name,
           message: error.message,
           stack: error.stack,

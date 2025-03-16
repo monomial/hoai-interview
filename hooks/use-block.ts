@@ -45,6 +45,7 @@ export function useBlock() {
 
   const block = useMemo(() => {
     if (!localBlock) return initialBlockData;
+    console.log(`[DEBUG] Block state: kind=${localBlock.kind}, isVisible=${localBlock.isVisible}, status=${localBlock.status}`);
     return localBlock;
   }, [localBlock]);
 
@@ -52,7 +53,13 @@ export function useBlock() {
     (updaterFn: UIBlock | ((currentBlock: UIBlock) => UIBlock)) => {
       setLocalBlock((currentBlock) => {
         const blockToUpdate = currentBlock || initialBlockData;
-
+        
+        const newBlock = typeof updaterFn === 'function' 
+          ? updaterFn(blockToUpdate)
+          : updaterFn;
+        
+        console.log(`[DEBUG] Setting block: kind=${newBlock.kind}, isVisible=${newBlock.isVisible}, status=${newBlock.status}`);
+        
         if (typeof updaterFn === 'function') {
           return updaterFn(blockToUpdate);
         }

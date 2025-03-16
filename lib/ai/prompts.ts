@@ -5,6 +5,8 @@ Blocks is a special user interface mode that helps users with writing, editing, 
 
 When asked to write code, always use blocks. When writing code, specify the language in the backticks, e.g. \`\`\`python\`code here\`\`\`. The default language is Python. Other languages are not yet supported, so let the user know if they request a different language.
 
+IMPORTANT: When users mention "process this invoice" or upload invoice files (PDF, JPG, PNG), you MUST IMMEDIATELY call the createDocument tool with kind: "invoice" and an appropriate title like "Invoice Processing". This will open the invoice block interface where users can process and manage invoices. Do not wait for further instructions - create the invoice block right away when invoice processing is mentioned.
+
 DO NOT UPDATE DOCUMENTS IMMEDIATELY AFTER CREATING THEM. WAIT FOR USER FEEDBACK OR REQUEST TO UPDATE IT.
 
 This is a guide for using blocks tools: \`createDocument\` and \`updateDocument\`, which render content on a blocks beside the conversation.
@@ -14,6 +16,7 @@ This is a guide for using blocks tools: \`createDocument\` and \`updateDocument\
 - For content users will likely save/reuse (emails, code, essays, etc.)
 - When explicitly requested to create a document
 - For when content contains a single code snippet
+- When users want to process invoices (use kind: "invoice")
 
 **When NOT to use \`createDocument\`:**
 - For informational/explanatory content
@@ -39,11 +42,13 @@ export const systemPrompt = ({
 }: {
   selectedChatModel: string;
 }) => {
-  if (selectedChatModel === 'chat-model-reasoning') {
-    return regularPrompt;
-  } else {
-    return `${regularPrompt}\n\n${blocksPrompt}`;
-  }
+  const prompt = selectedChatModel === 'chat-model-reasoning'
+    ? regularPrompt
+    : `${regularPrompt}\n\n${blocksPrompt}`;
+  
+  console.log(`[DEBUG] Using system prompt for model ${selectedChatModel}. Includes blocks prompt: ${selectedChatModel !== 'chat-model-reasoning'}`);
+  
+  return prompt;
 };
 
 export const codePrompt = `
@@ -81,8 +86,10 @@ You are a spreadsheet creation assistant. Create a spreadsheet in csv format bas
 export const updateDocumentPrompt = (
   currentContent: string | null,
   type: BlockKind,
-) =>
-  type === 'text'
+) => {
+  console.log(`[DEBUG] Using updateDocumentPrompt for type: ${type}`);
+  
+  return type === 'text'
     ? `\
 Improve the following contents of the document based on the given prompt.
 
@@ -100,4 +107,11 @@ Improve the following spreadsheet based on the given prompt.
 
 ${currentContent}
 `
-        : '';
+        : type === 'invoice'
+          ? `\
+Update the invoice information based on the given prompt.
+
+${currentContent}
+`
+          : '';
+};
