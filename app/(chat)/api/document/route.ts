@@ -27,11 +27,7 @@ export async function GET(request: Request) {
   if (!document) {
     return new Response('Not Found', { status: 404 });
   }
-
-  if (document.userId !== session.user.id) {
-    return new Response('Unauthorized', { status: 401 });
-  }
-
+  
   return Response.json(documents, { status: 200 });
 }
 
@@ -88,10 +84,6 @@ export async function PATCH(request: Request) {
   const documents = await getDocumentsById({ id });
 
   const [document] = documents;
-
-  if (document.userId !== session.user.id) {
-    return new Response('Unauthorized', { status: 401 });
-  }
 
   await deleteDocumentsByIdAfterTimestamp({
     id,
