@@ -23,6 +23,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { MessageEditor } from './message-editor';
 import { DocumentPreview } from './document-preview';
 import { MessageReasoning } from './message-reasoning';
+import { useDebugMode } from '@/hooks/use-debug-mode';
 
 const PurePreviewMessage = ({
   chatId,
@@ -46,6 +47,7 @@ const PurePreviewMessage = ({
   isReadonly: boolean;
 }) => {
   const [mode, setMode] = useState<'view' | 'edit'>('view');
+  const { isDebugMode } = useDebugMode();
 
   return (
     <AnimatePresence>
@@ -164,8 +166,19 @@ const PurePreviewMessage = ({
                             result={result}
                             isReadonly={isReadonly}
                           />
+                        ) : toolName === 'processInvoice' ? (
+                          <>
+                            <div className="p-4 border rounded-md bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-200">
+                              <p className="font-medium">Invoice processed successfully</p>
+                            </div>
+                            {isDebugMode && (
+                              <pre className="mt-2 p-4 bg-gray-100 dark:bg-gray-800 rounded-md overflow-auto text-xs">
+                                {JSON.stringify(result, null, 2)}
+                              </pre>
+                            )}
+                          </>
                         ) : (
-                          <pre>{JSON.stringify(result, null, 2)}</pre>
+                          isDebugMode && <pre>{JSON.stringify(result, null, 2)}</pre>
                         )}
                       </div>
                     );

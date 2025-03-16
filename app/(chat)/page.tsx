@@ -23,7 +23,7 @@ export default async function Page() {
             <p className="font-medium mb-1">How to use:</p>
             <ol className="list-decimal pl-5 space-y-1">
               <li>Upload an invoice PDF or image using the attachment button below</li>
-              <li>Ask the AI to "Process this invoice"</li>
+              <li>Ask the AI to &quot;Process this invoice&quot;</li>
               <li>The AI will extract and validate the invoice information</li>
               <li>View and manage all processed invoices in the <strong>Invoices</strong> page</li>
             </ol>
@@ -35,7 +35,6 @@ export default async function Page() {
           initialMessages={[]}
           selectedChatModel={DEFAULT_CHAT_MODEL}
           selectedVisibilityType="private"
-          isReadonly={false}
         />
         <DataStreamHandler id={id} />
       </>
@@ -53,7 +52,7 @@ export default async function Page() {
           <p className="font-medium mb-1">How to use:</p>
           <ol className="list-decimal pl-5 space-y-1">
             <li>Upload an invoice PDF or image using the attachment button below</li>
-            <li>Ask the AI to "Process this invoice"</li>
+            <li>Ask the AI to &quot;Process this invoice&quot;</li>
             <li>The AI will extract and validate the invoice information</li>
             <li>View and manage all processed invoices in the <strong>Invoices</strong> page</li>
           </ol>
@@ -65,7 +64,6 @@ export default async function Page() {
         initialMessages={[]}
         selectedChatModel={modelIdFromCookie.value}
         selectedVisibilityType="private"
-        isReadonly={false}
       />
       <DataStreamHandler id={id} />
     </>

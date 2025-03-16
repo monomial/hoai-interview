@@ -10,6 +10,7 @@ import { useSidebar } from './ui/sidebar';
 import { memo } from 'react';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { type VisibilityType, VisibilitySelector } from './visibility-selector';
+import { DebugToggle } from './debug-toggle';
 
 function PureChatHeader({
   chatId,
@@ -64,6 +65,10 @@ function PureChatHeader({
           className="order-1 md:order-3"
         />
       )}
+      
+      <div className="ml-auto order-3 md:order-4">
+        <DebugToggle />
+      </div>
     </header>
   );
 }

@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Toaster } from '@/components/ui/toaster';
 
 import { ThemeProvider } from '@/components/theme-provider';
+import { DebugModeProvider } from '@/hooks/use-debug-mode';
 
 import './globals.css';
 
@@ -63,8 +64,10 @@ export default async function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          <Toaster />
-          {children}
+          <DebugModeProvider>
+            <Toaster />
+            {children}
+          </DebugModeProvider>
         </ThemeProvider>
       </body>
     </html>

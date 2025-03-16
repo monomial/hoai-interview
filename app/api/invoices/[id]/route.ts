@@ -24,7 +24,7 @@ const formatDateForStorage = (dateString: string | null): string | null => {
 
 export async function GET(
   request: NextRequest,
-  context: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await auth();
@@ -36,7 +36,7 @@ export async function GET(
       );
     }
 
-    const { id } = await context.params;
+    const { id } = await params;
     
     // Get invoice details
     const invoice = await getInvoiceById({ id });
@@ -60,7 +60,7 @@ export async function GET(
 
 export async function PUT(
   request: NextRequest,
-  context: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await auth();
@@ -72,7 +72,7 @@ export async function PUT(
       );
     }
 
-    const { id } = await context.params;
+    const { id } = await params;
     const data = await request.json();
     
     // Update invoice with properly formatted dates
@@ -119,7 +119,7 @@ export async function PUT(
 
 export async function DELETE(
   request: NextRequest,
-  context: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await auth();
@@ -131,7 +131,7 @@ export async function DELETE(
       );
     }
 
-    const { id } = await context.params;
+    const { id } = await params;
     
     // Delete invoice
     await deleteInvoiceById({ id });
