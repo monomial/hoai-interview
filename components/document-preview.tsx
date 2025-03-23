@@ -41,20 +41,31 @@ export function DocumentPreview({
 
   const previewDocument = useMemo(() => documents?.[0], [documents]);
   const hitboxRef = useRef<HTMLDivElement>(null);
+  const lastBoundingBoxRef = useRef<DOMRect | null>(null);
 
   useEffect(() => {
     const boundingBox = hitboxRef.current?.getBoundingClientRect();
 
     if (block.documentId && boundingBox) {
-      setBlock((block) => ({
-        ...block,
-        boundingBox: {
-          left: boundingBox.x,
-          top: boundingBox.y,
-          width: boundingBox.width,
-          height: boundingBox.height,
-        },
-      }));
+      const lastBox = lastBoundingBoxRef.current;
+      if (!lastBox || 
+          lastBox.x !== boundingBox.x ||
+          lastBox.y !== boundingBox.y ||
+          lastBox.width !== boundingBox.width ||
+          lastBox.height !== boundingBox.height) {
+        
+        lastBoundingBoxRef.current = boundingBox;
+        
+        setBlock((block) => ({
+          ...block,
+          boundingBox: {
+            left: boundingBox.x,
+            top: boundingBox.y,
+            width: boundingBox.width,
+            height: boundingBox.height,
+          },
+        }));
+      }
     }
   }, [block.documentId, setBlock]);
 
@@ -150,23 +161,23 @@ const PureHitboxLayer = ({
     (event: MouseEvent<HTMLElement>) => {
       const boundingBox = event.currentTarget.getBoundingClientRect();
 
-      setBlock((block) =>
-        block.status === 'streaming'
-          ? { ...block, isVisible: true }
-          : {
-              ...block,
-              title: result.title,
-              documentId: result.id,
-              kind: result.kind,
-              isVisible: true,
-              boundingBox: {
-                left: boundingBox.x,
-                top: boundingBox.y,
-                width: boundingBox.width,
-                height: boundingBox.height,
-              },
-            },
-      );
+      setBlock((block) => {
+        const newBlock = {
+          ...block,
+          title: result.title,
+          documentId: result.id,
+          kind: result.kind,
+          isVisible: true,
+          boundingBox: {
+            left: boundingBox.x,
+            top: boundingBox.y,
+            width: boundingBox.width,
+            height: boundingBox.height,
+          },
+        };
+        console.log(`[DEBUG] Setting block on click:`, newBlock);
+        return newBlock;
+      });
     },
     [setBlock, result],
   );

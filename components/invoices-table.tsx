@@ -21,6 +21,8 @@ import {
 import { useToast } from '@/components/ui/use-toast';
 import { Label } from '@/components/ui/label';
 import React from 'react';
+import { useBlock } from '@/hooks/use-block';
+import { FileText, Download } from 'lucide-react';
 
 // Utility function to format dates consistently without timezone shifting
 const formatDate = (dateString: string | null): string => {
@@ -69,46 +71,61 @@ type Invoice = {
   dueDate: string | null;
   amount: number;
   createdAt: string;
+  filePath?: string;
   lineItems?: LineItem[];
 };
 
-export function InvoicesTable() {
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
+const formatCurrency = (amount: number): string => {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD'
+  }).format(amount);
+};
+
+export function InvoicesTable({ useBlockContext = true }: { useBlockContext?: boolean }) {
+  const blockContext = useBlock();
+  const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
   const [sortField, setSortField] = useState<keyof Invoice>('invoiceDate');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
-  const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
-  const [showLineItems, setShowLineItems] = useState<Record<string, boolean>>({});
   const [editingLineItem, setEditingLineItem] = useState<LineItem | null>(null);
+  const [showLineItems, setShowLineItems] = useState<Record<string, boolean>>({});
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
   const { toast } = useToast();
-  
+
+  // Use invoices from metadata if in block context, otherwise fetch directly
   useEffect(() => {
-    fetchInvoices();
-  }, []);
-  
-  const fetchInvoices = async () => {
-    try {
-      const response = await fetch('/api/invoices');
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Fetched invoices:', data);
-        setInvoices(data);
-      } else {
-        toast({
-          title: "Error",
-          description: "Failed to fetch invoices",
-          variant: "destructive"
-        });
-      }
-    } catch (error) {
-      console.error('Error fetching invoices:', error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch invoices",
-        variant: "destructive"
-      });
+    if (!useBlockContext) {
+      const fetchInvoices = async () => {
+        try {
+          const response = await fetch('/api/invoices');
+          if (response.ok) {
+            const data = await response.json();
+            setInvoices(data);
+          } else {
+            toast({
+              title: "Error",
+              description: "Failed to fetch invoices",
+              variant: "destructive"
+            });
+          }
+        } catch (error) {
+          console.error('Error fetching invoices:', error);
+          toast({
+            title: "Error",
+            description: "Failed to fetch invoices",
+            variant: "destructive"
+          });
+        }
+      };
+
+      fetchInvoices();
     }
-  };
-  
+  }, [useBlockContext, toast]);
+
+  // Use block context invoices if available, otherwise use local state
+  const displayInvoices = useBlockContext ? (blockContext?.metadata?.invoices || []) : invoices;
+
   const handleSort = (field: keyof Invoice) => {
     if (field === sortField) {
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
@@ -116,33 +133,27 @@ export function InvoicesTable() {
       setSortField(field);
       setSortDirection('asc');
     }
-    
-    // Sort invoices
-    const sortedInvoices = [...invoices].sort((a, b) => {
-      const aValue = a[field];
-      const bValue = b[field];
-      
-      if (aValue === null || aValue === undefined) return sortDirection === 'asc' ? -1 : 1;
-      if (bValue === null || bValue === undefined) return sortDirection === 'asc' ? 1 : -1;
-      
-      if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1;
-      if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
-      return 0;
-    });
-    
-    setInvoices(sortedInvoices);
   };
-  
+
+  const sortedInvoices = [...displayInvoices].sort((a, b) => {
+    const aValue = a[sortField];
+    const bValue = b[sortField];
+    
+    if (aValue === null || aValue === undefined) return sortDirection === 'asc' ? -1 : 1;
+    if (bValue === null || bValue === undefined) return sortDirection === 'asc' ? 1 : -1;
+    
+    if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1;
+    if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
+    return 0;
+  });
+
   const handleSaveEdit = async () => {
     if (!editingInvoice) return;
     
     try {
-      // Prepare the invoice data for submission
-      // We don't need to modify the dates here since the API will handle the formatting
       const invoiceData = {
         ...editingInvoice,
-        // Make sure lineItems are properly formatted
-        lineItems: editingInvoice.lineItems?.map(item => ({
+        lineItems: editingInvoice.lineItems?.map((item: LineItem) => ({
           description: item.description,
           quantity: item.quantity,
           unitPrice: item.unitPrice,
@@ -163,8 +174,15 @@ export function InvoicesTable() {
           title: "Invoice updated",
           description: "The invoice has been successfully updated",
         });
-        fetchInvoices();
         setEditingInvoice(null);
+        // Refresh invoices if not using block context
+        if (!useBlockContext) {
+          const refreshResponse = await fetch('/api/invoices');
+          if (refreshResponse.ok) {
+            const data = await refreshResponse.json();
+            setInvoices(data);
+          }
+        }
       } else {
         toast({
           title: "Update failed",
@@ -182,11 +200,9 @@ export function InvoicesTable() {
     }
   };
 
-  const handleDeleteInvoice = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this invoice?')) return;
-    
+  const handleDeleteInvoice = async (invoiceId: string) => {
     try {
-      const response = await fetch(`/api/invoices/${id}`, {
+      const response = await fetch(`/api/invoices/${invoiceId}`, {
         method: 'DELETE',
       });
       
@@ -195,7 +211,6 @@ export function InvoicesTable() {
           title: "Invoice deleted",
           description: "The invoice has been successfully deleted",
         });
-        fetchInvoices();
       } else {
         toast({
           title: "Delete failed",
@@ -214,8 +229,6 @@ export function InvoicesTable() {
   };
 
   const toggleLineItems = (invoiceId: string) => {
-    console.log('Toggling line items for invoice:', invoiceId);
-    console.log('Current invoice line items:', invoices.find(inv => inv.id === invoiceId)?.lineItems);
     setShowLineItems(prev => ({
       ...prev,
       [invoiceId]: !prev[invoiceId]
@@ -281,10 +294,38 @@ export function InvoicesTable() {
     });
   };
   
+  const handleViewFile = (filePath: string) => {
+    if (!filePath) return;
+    window.open(filePath, '_blank');
+  };
+
+  const handleDownloadFile = async (filePath: string, fileName: string) => {
+    if (!filePath) return;
+    try {
+      const response = await fetch(filePath);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName || 'invoice.pdf';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (error) {
+      console.error('Error downloading file:', error);
+      toast({
+        title: "Download failed",
+        description: "Failed to download the invoice file",
+        variant: "destructive"
+      });
+    }
+  };
+
   return (
     <div>
       <h2 className="text-2xl font-bold mb-4">Processed Invoices</h2>
-      {invoices.length === 0 ? (
+      {displayInvoices.length === 0 ? (
         <div className="text-center py-8 text-gray-500">
           No invoices found. Upload an invoice in the chat to get started.
         </div>
@@ -323,10 +364,11 @@ export function InvoicesTable() {
                 )}
               </TableHead>
               <TableHead>Actions</TableHead>
+              <TableHead>File</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {invoices.map((invoice) => (
+            {sortedInvoices.map((invoice) => (
               <React.Fragment key={invoice.id}>
                 <TableRow>
                   <TableCell>{invoice.vendorName}</TableCell>
@@ -525,6 +567,30 @@ export function InvoicesTable() {
                         {showLineItems[invoice.id] ? 'Hide Items' : 'Show Items'}
                       </Button>
                     </div>
+                  </TableCell>
+                  <TableCell>
+                    {invoice.filePath ? (
+                      <div className="flex gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleViewFile(invoice.filePath!)}
+                          title="View PDF"
+                        >
+                          <FileText className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDownloadFile(invoice.filePath!, `${invoice.invoiceNumber}.pdf`)}
+                          title="Download PDF"
+                        >
+                          <Download className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground text-sm">No file</span>
+                    )}
                   </TableCell>
                 </TableRow>
                 

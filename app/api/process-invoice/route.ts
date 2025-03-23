@@ -1,20 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { processInvoice } from '@/lib/ai/tools/process-invoice';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { processInvoiceImplementation } from '@/lib/ai/tools/process-invoice';
+import { auth } from '@/app/(auth)/auth';
 
 export async function POST(req: NextRequest) {
   console.log('[DEBUG] /api/process-invoice endpoint called');
   
   try {
-    const session = await getServerSession(authOptions);
-    
-    if (!session?.user) {
-      console.log('[DEBUG] Unauthorized request to process invoice');
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+    // Skip authentication in development mode
+    if (process.env.NODE_ENV !== 'development') {
+      const session = await auth();
+      
+      if (!session?.user) {
+        console.log('[DEBUG] Unauthorized request to process invoice');
+        return NextResponse.json(
+          { error: 'Unauthorized' },
+          { status: 401 }
+        );
+      }
     }
     
     const formData = await req.formData();
@@ -45,17 +47,44 @@ export async function POST(req: NextRequest) {
     const fileBase64 = Buffer.from(fileBuffer).toString('base64');
     console.log(`[DEBUG] File converted to base64, length: ${fileBase64.length}`);
     
+    // Create a TransformStream for streaming the response
+    const stream = new TransformStream();
+    const writer = stream.writable.getWriter();
+    const encoder = new TextEncoder();
+    
     // Process the invoice
-    console.log('[DEBUG] Calling processInvoice.invoke');
-    const result = await processInvoice.invoke({
+    console.log('[DEBUG] Calling processInvoiceImplementation');
+    const result = await processInvoiceImplementation({
       fileContent: fileBase64,
       fileType: file.type,
       fileName: file.name,
-      updateIfExists: true
+      updateIfExists: true,
+      dataStream: {
+        writeData: async (data) => {
+          const jsonStr = JSON.stringify(data);
+          await writer.write(encoder.encode(`data: ${jsonStr}\n\n`));
+          
+          // If this is the final result, close the writer
+          if (data.type === 'invoice-processed') {
+            console.log('[DEBUG] Final result received, closing writer...');
+            await writer.close();
+            console.log('[DEBUG] Writer closed');
+          }
+        }
+      }
     });
     
     console.log(`[DEBUG] Invoice processing result: ${JSON.stringify(result, null, 2)}`);
-    return NextResponse.json(result);
+    
+    // Return the stream response using Next.js's Response
+    return new Response(stream.readable, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    });
   } catch (error) {
     console.error('[DEBUG] Error processing invoice:', error);
     return NextResponse.json(

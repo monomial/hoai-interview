@@ -55,6 +55,11 @@ export async function POST(request: Request) {
     return new Response('No user message found', { status: 400 });
   }
 
+  // Truncate messages to prevent rate limits
+  const MAX_MESSAGES = 10; // Keep only the last 10 messages
+  const truncatedMessages = messages.slice(-MAX_MESSAGES);
+  console.log(`[DEBUG] Truncated messages from ${messages.length} to ${truncatedMessages.length}`);
+
   console.log(`[DEBUG] User message: "${typeof userMessage.content === 'string' ? userMessage.content : 'Non-string content'}"`);
   
   // Check for attachments
@@ -96,6 +101,14 @@ export async function POST(request: Request) {
       attachments.forEach((attachment: any, index: number) => {
         console.log(`[DEBUG] Invoice attachment ${index + 1}: type=${attachment.type}, name=${attachment.name || 'unnamed'}`);
       });
+      
+      // If we have a PDF attachment, we can process it directly
+      const pdfAttachment = attachments.find((a: any) => a.type === 'application/pdf');
+      if (pdfAttachment) {
+        console.log('[DEBUG] Found PDF attachment, will process it after creating invoice block');
+        // We'll process this after the invoice block is created
+        // The AI model will handle this in its response
+      }
     }
   }
 
@@ -111,8 +124,11 @@ export async function POST(request: Request) {
       const result = streamText({
         model: myProvider.languageModel(modelToUse),
         system: systemPrompt({ selectedChatModel: modelToUse }),
-        messages,
-        maxSteps: 5,
+        messages: truncatedMessages,
+        maxSteps: 10,
+        onStepFinish({ text, toolCalls, toolResults, finishReason, usage }) {
+          console.log('[DEBUG] Step finished', { text, toolCalls, toolResults, finishReason, usage });
+        },
         experimental_activeTools:
           modelToUse === 'chat-model-reasoning'
             ? []
@@ -127,10 +143,25 @@ export async function POST(request: Request) {
         experimental_generateMessageId: generateUUID,
         tools: {
           getWeather,
-          createDocument: createDocument({ session, dataStream }),
-          updateDocument: updateDocument({ session, dataStream }),
+          createDocument: createDocument({ 
+            session: { 
+              ...session, 
+              expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() 
+            }, 
+            dataStream 
+          }),
+          updateDocument: updateDocument({ 
+            session: { 
+              ...session, 
+              expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() 
+            }, 
+            dataStream 
+          }),
           requestSuggestions: requestSuggestions({
-            session,
+            session: { 
+              ...session, 
+              expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() 
+            },
             dataStream,
           }),
           processInvoice,

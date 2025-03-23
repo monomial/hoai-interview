@@ -112,6 +112,8 @@ export const invoiceBlock = new Block<"invoice", InvoiceBlockMetadata>({
       const formData = new FormData();
       formData.append('file', selectedFile);
       
+      let reader: ReadableStreamDefaultReader | null = null;
+      
       try {
         console.log('[DEBUG] Sending request to /api/process-invoice');
         const response = await fetch('/api/process-invoice', {
@@ -119,52 +121,82 @@ export const invoiceBlock = new Block<"invoice", InvoiceBlockMetadata>({
           body: formData
         });
         
-        if (response.ok) {
-          const result = await response.json();
-          console.log(`[DEBUG] Invoice processing result:`, result);
+        if (!response.ok) {
+          const errorData = await response.json();
+          console.log(`[DEBUG] API request failed with status: ${response.status}`, errorData);
+          toast.error(errorData.error || "Failed to process invoice");
+          return;
+        }
+        
+        // Handle streaming response
+        if (!response.body) {
+          throw new Error('No response body available');
+        }
+        
+        reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        
+        while (true) {
+          const { done, value } = await reader.read();
           
-          if (result.success) {
-            toast.success("Invoice processed successfully");
-            
-            // Refresh the invoices list
-            console.log('[DEBUG] Refreshing invoices list');
-            const invoicesResponse = await fetch('/api/invoices');
-            if (invoicesResponse.ok) {
-              const invoices = await invoicesResponse.json();
-              console.log(`[DEBUG] Fetched ${invoices.length} invoices after processing`);
-              setMetadata((metadata) => ({
-                ...metadata,
-                invoices,
-                currentInvoiceId: result.invoice.id,
-                isProcessing: false
-              }));
-            }
-          } else {
-            console.log(`[DEBUG] Invoice processing failed: ${result.error}`);
-            toast.error(result.error || "Failed to process invoice");
-            setMetadata((metadata) => ({
-              ...metadata,
-              isProcessing: false
-            }));
+          if (done) {
+            console.log('[DEBUG] Stream complete');
+            break;
           }
-        } else {
-          console.log(`[DEBUG] API request failed with status: ${response.status}`);
-          toast.error("Failed to process invoice");
-          setMetadata((metadata) => ({
-            ...metadata,
-            isProcessing: false
-          }));
+          
+          // Convert the chunk to text and add to buffer
+          buffer += decoder.decode(value, { stream: true });
+          
+          // Process complete lines from the buffer
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || ''; // Keep the last incomplete line in the buffer
+          
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            
+            try {
+              // Remove the "data: " prefix if present (SSE format)
+              const jsonStr = line.replace(/^data: /, '').trim();
+              const data = JSON.parse(jsonStr);
+              console.log(`[DEBUG] Received stream data:`, data);
+              
+              if (data.type === 'invoice-processed') {
+                const invoiceData = data.content;
+                console.log(`[DEBUG] Received processed invoice data for ID: ${invoiceData.id}`);
+                
+                setMetadata((metadata) => ({
+                  ...metadata,
+                  currentInvoiceId: invoiceData.id,
+                  isProcessing: false,
+                  invoices: [
+                    invoiceData,
+                    ...metadata.invoices.filter(inv => inv.id !== invoiceData.id)
+                  ]
+                }));
+                
+                toast.success("Invoice processed successfully");
+              }
+            } catch (e) {
+              console.error('[DEBUG] Error parsing stream data:', e);
+              toast.error("Error processing invoice data");
+            }
+          }
         }
       } catch (error) {
         console.error("[DEBUG] Error processing invoice:", error);
-        toast.error("Error processing invoice");
+        toast.error(error instanceof Error ? error.message : "Error processing invoice");
+      } finally {
+        // Clean up
+        if (reader) {
+          reader.releaseLock();
+        }
         setMetadata((metadata) => ({
           ...metadata,
           isProcessing: false
         }));
+        setSelectedFile(null);
       }
-      
-      setSelectedFile(null);
     };
     
     return (
@@ -183,9 +215,20 @@ export const invoiceBlock = new Block<"invoice", InvoiceBlockMetadata>({
                 className="hidden"
                 accept=".pdf,.jpg,.jpeg,.png"
                 onChange={handleFileChange}
+                onClick={(e) => {
+                  // Reset the input value to allow selecting the same file again
+                  e.currentTarget.value = '';
+                }}
               />
               <label htmlFor="invoice-file" className="cursor-pointer">
-                <Button variant="outline" type="button">
+                <Button 
+                  variant="outline" 
+                  type="button"
+                  onClick={() => {
+                    // Trigger the file input click
+                    document.getElementById('invoice-file')?.click();
+                  }}
+                >
                   Select File
                 </Button>
               </label>
