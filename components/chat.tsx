@@ -92,7 +92,7 @@ export function Chat({
 
   return (
     <>
-      <div className="flex flex-col min-w-0 h-dvh bg-background">
+      <div className="flex flex-col h-full">
         <ChatHeader
           chatId={id}
           selectedModelId={selectedChatModel}
@@ -100,32 +100,36 @@ export function Chat({
           isReadonly={false}
         />
 
-        <Messages
-          chatId={id}
-          isLoading={isLoading}
-          votes={votes}
-          messages={messages}
-          setMessages={setMessages}
-          reload={reload}
-          isReadonly={false}
-          isBlockVisible={isBlockVisible}
-        />
-
-        <form className="flex mx-auto px-4 bg-background pb-4 md:pb-6 gap-2 w-full md:max-w-3xl">
-          <MultimodalInput
+        <div className="flex-1 overflow-y-auto">
+          <Messages
             chatId={id}
-            input={input}
-            setInput={setInput}
-            handleSubmit={handleSubmit}
             isLoading={isLoading}
-            stop={stop}
-            attachments={attachments}
-            setAttachments={setAttachments}
+            votes={votes}
             messages={messages}
             setMessages={setMessages}
-            append={append}
+            reload={reload}
+            isReadonly={false}
+            isBlockVisible={isBlockVisible}
           />
-        </form>
+        </div>
+
+        <div className="flex-none w-full bg-background border-t">
+          <form className="flex mx-auto px-4 py-4 w-full md:max-w-3xl">
+            <MultimodalInput
+              chatId={id}
+              input={input}
+              setInput={setInput}
+              handleSubmit={handleSubmit}
+              isLoading={isLoading}
+              stop={stop}
+              attachments={attachments}
+              setAttachments={setAttachments}
+              messages={messages}
+              setMessages={setMessages}
+              append={append}
+            />
+          </form>
+        </div>
       </div>
 
       <Block

@@ -176,6 +176,13 @@ export const invoiceBlock = new Block<"invoice", InvoiceBlockMetadata>({
                 }));
                 
                 toast.success("Invoice processed successfully");
+              } else if (data.type === 'error') {
+                console.log(`[DEBUG] Received error: ${data.content}`);
+                toast.error(data.content);
+                setMetadata((metadata) => ({
+                  ...metadata,
+                  isProcessing: false
+                }));
               }
             } catch (e) {
               console.error('[DEBUG] Error parsing stream data:', e);

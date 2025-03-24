@@ -6,9 +6,110 @@ import {
   updateInvoice,
   deleteLineItemsByInvoiceId
 } from '@/lib/db/queries';
-import { tool, generateText, type DataStreamWriter } from 'ai';
+import { tool, generateText, type DataStreamWriter, generateObject } from 'ai';
 import { z } from 'zod';
 import { anthropic } from '@ai-sdk/anthropic';
+
+// Helper functions for international format handling
+function parseInternationalDate(dateStr: string): string {
+  // Handle common international date formats
+  const months: { [key: string]: number } = {
+    'januar': 1, 'january': 1, 'jan': 1,
+    'februar': 2, 'february': 2, 'feb': 2,
+    'märz': 3, 'march': 3, 'mar': 3,
+    'april': 4, 'apr': 4,
+    'mai': 5, 'may': 5,
+    'juni': 6, 'june': 6, 'jun': 6,
+    'juli': 7, 'july': 7, 'jul': 7,
+    'august': 8, 'aug': 8,
+    'september': 9, 'sep': 9,
+    'oktober': 10, 'october': 10, 'oct': 10,
+    'november': 11, 'nov': 11,
+    'dezember': 12, 'december': 12, 'dec': 12
+  };
+
+  try {
+    // Remove any leading/trailing whitespace and convert to lowercase
+    dateStr = dateStr.toLowerCase().trim();
+    
+    // Handle German format (7. Mai 2014)
+    const germanFormat = dateStr.match(/(\d+)\.\s*([a-zä]+)\s*(\d{4})/i);
+    if (germanFormat) {
+      const [_, day, month, year] = germanFormat;
+      const monthNum = months[month.toLowerCase()];
+      if (monthNum) {
+        return `${year}-${String(monthNum).padStart(2, '0')}-${String(parseInt(day)).padStart(2, '0')}`;
+      }
+    }
+
+    // Handle period format (01.05.14)
+    const periodFormat = dateStr.match(/(\d{2})\.(\d{2})\.(\d{2})/);
+    if (periodFormat) {
+      const [_, day, month, year] = periodFormat;
+      const fullYear = parseInt(year) < 50 ? `20${year}` : `19${year}`;
+      return `${fullYear}-${month}-${day}`;
+    }
+
+    // Try standard Date parsing as fallback
+    const date = new Date(dateStr);
+    if (!isNaN(date.getTime())) {
+      return date.toISOString().split('T')[0];
+    }
+  } catch (e) {
+    console.error('[DEBUG] Date parsing error:', e);
+  }
+
+  // Return current date if parsing fails
+  return new Date().toISOString().split('T')[0];
+}
+
+function parseInternationalAmount(amountStr: string | number): number {
+  if (typeof amountStr === 'number') return amountStr;
+  
+  try {
+    // Remove currency symbols and whitespace
+    const cleaned = amountStr.replace(/[$€£¥]|\s/g, '');
+    
+    // Handle European format (comma as decimal separator)
+    if (cleaned.includes(',') && !cleaned.includes('.')) {
+      return parseFloat(cleaned.replace(',', '.'));
+    }
+    
+    // Handle amounts with both thousands and decimal separators
+    if (cleaned.includes(',') && cleaned.includes('.')) {
+      // If comma comes after dot, treat comma as decimal
+      if (cleaned.lastIndexOf(',') > cleaned.lastIndexOf('.')) {
+        return parseFloat(cleaned.replace(/\./g, '').replace(',', '.'));
+      }
+      // Otherwise treat dot as decimal
+      return parseFloat(cleaned.replace(/,/g, ''));
+    }
+    
+    return parseFloat(cleaned);
+  } catch (e) {
+    console.error('[DEBUG] Amount parsing error:', e);
+    return 0;
+  }
+}
+
+function extractServicePeriod(description: string): { 
+  description: string, 
+  servicePeriod?: { start: string; end: string } 
+} {
+  // Match date ranges in format DD.MM.YY-DD.MM.YY or similar
+  const periodMatch = description.match(/(\d{2}\.\d{2}\.\d{2})-(\d{2}\.\d{2}\.\d{2})/);
+  if (periodMatch) {
+    const [_, startDate, endDate] = periodMatch;
+    return {
+      description: description.replace(/\d{2}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}/, '').trim(),
+      servicePeriod: {
+        start: parseInternationalDate(startDate),
+        end: parseInternationalDate(endDate)
+      }
+    };
+  }
+  return { description };
+}
 
 // Define schema for line items
 const lineItemSchema = z.object({
@@ -16,16 +117,26 @@ const lineItemSchema = z.object({
   quantity: z.number().optional(),
   unitPrice: z.number().optional(),
   total: z.number(),
+  serviceId: z.string().optional(),
+  servicePeriod: z.object({
+    start: z.string(),
+    end: z.string()
+  }).optional()
 });
 
 // Define schema for invoice data
 const invoiceDataSchema = z.object({
   customerName: z.string(),
+  customerAddress: z.string(),
   vendorName: z.string(),
+  vendorAddress: z.string(),
   invoiceNumber: z.string(),
   invoiceDate: z.string(),
   dueDate: z.string().optional(),
   amount: z.number(),
+  currency: z.string().optional(),
+  language: z.string().optional(),
+  contractNumber: z.string().optional(),
   lineItems: z.array(lineItemSchema).optional(),
 });
 
@@ -46,95 +157,94 @@ async function validateAndExtractInvoiceData(fileContent: string, fileType: stri
   try {
     console.log('[DEBUG] Starting combined invoice validation and extraction');
     
-    const response = await generateText({
+    // Define the schema for the response
+    const responseSchema = z.object({
+      isInvoice: z.boolean(),
+      language: z.string().optional(),
+      invoiceData: z.object({
+        customerName: z.string(),
+        customerAddress: z.string(),
+        vendorName: z.string(),
+        vendorAddress: z.string(),
+        invoiceNumber: z.string(),
+        invoiceDate: z.string(),
+        amount: z.number(),
+        currency: z.string().optional(),
+        language: z.string().optional(),
+        contractNumber: z.string().optional(),
+        dueDate: z.string().optional(),
+        lineItems: z.array(z.object({
+          description: z.string(),
+          quantity: z.number().optional(),
+          unitPrice: z.number().optional(),
+          total: z.number(),
+          serviceId: z.string().optional(),
+          servicePeriod: z.object({
+            start: z.string(),
+            end: z.string()
+          }).optional()
+        })).optional()
+      }).optional(),
+      error: z.string().optional()
+    });
+
+    const result = await generateObject({
       model: invoiceModel as any,
-      messages: [{
-        role: 'user',
-        content: `You are an invoice processing specialist. Analyze this ${fileType} document and:
-1. First determine if it is an invoice by looking for key indicators like:
-   - Invoice number or reference
-   - Billing details
-   - Payment terms
-   - Line items or charges
-   - Total amount
+      schema: responseSchema,
+      prompt: `You are an invoice processing specialist with expertise in international invoices. Analyze this ${fileType} document and:
 
-2. If it is an invoice, extract the following data and return as JSON:
-{
-  "isInvoice": true,
-  "data": {
-    "customerName": "Customer/client name",
-    "vendorName": "Vendor/supplier name",
-    "invoiceNumber": "Invoice number/ID",
-    "invoiceDate": "Issue date (YYYY-MM-DD)",
-    "amount": "Total amount (number only)",
-    "dueDate": "Due date (YYYY-MM-DD, optional)",
-    "lineItems": [
-      {
-        "description": "Item description",
-        "quantity": "Quantity (number)",
-        "unitPrice": "Unit price (number)",
-        "total": "Total for this line (number)"
-      }
-    ]
-  }
-}
+1. First determine the document language and if it is an invoice by looking for key indicators in multiple languages like:
+   - Invoice/Rechnung/Factura/Facture number
+   - Billing/payment details
+   - Line items, charges, or services
+   - Total amount and currency
+   - VAT/Tax/MwSt. information if present
 
-3. If it is not an invoice, return:
-{
-  "isInvoice": false,
-  "error": "Brief explanation of why it's not an invoice"
-}
+2. If it is an invoice, extract ALL of the following data precisely as shown:
+   - Full company names (both customer and vendor)
+   - Complete addresses (preserve format and international characters)
+   - Invoice number/reference (exact format)
+   - Contract number if present
+   - Issue date (preserve original format)
+   - Currency and amounts (preserve decimal format)
+   - Due date if shown (preserve original format)
+   
+3. For line items, capture:
+   - Full service descriptions
+   - Service IDs or reference numbers (e.g. OUDJQ_strukan)
+   - Service periods or date ranges
+   - Unit prices in original format
+   - Quantities if applicable
+   - Line item totals in original format
+
+4. Pay special attention to:
+   - International date formats (e.g. German: 7. Mai 2014)
+   - European number formats (using comma as decimal)
+   - Service identifiers and contract numbers
+   - Multi-line addresses
+   - Different currency symbols and positions
 
 Base64 ${fileType}: ${fileContent}`
-      }]
     });
     
-    const responseText = response.text || '';
-    console.log('[DEBUG] Combined validation/extraction response:', responseText);
-    
-    // Try different approaches to extract valid JSON
-    let extractedJson;
-    
-    // First try: Extract JSON if it's wrapped in code blocks
-    try {
-      const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)\s*```/) || [null, responseText];
-      const cleanJson = jsonMatch[1].trim();
-      extractedJson = JSON.parse(cleanJson);
-    } catch (jsonError) {
-      console.log('[DEBUG] Failed to parse JSON from code blocks, trying direct parsing');
-      
-      // Second try: Direct JSON parsing of the whole response
-      try {
-        extractedJson = JSON.parse(responseText.trim());
-      } catch (directJsonError) {
-        console.log('[DEBUG] Failed direct JSON parsing, trying to find JSON object in text');
-        
-        // Third try: Look for anything that looks like a JSON object
-        try {
-          const possibleJson = responseText.match(/(\{[\s\S]*\})/) || [null, '{}'];
-          extractedJson = JSON.parse(possibleJson[1]);
-        } catch (lastAttemptError) {
-          console.error('[DEBUG] All JSON parsing attempts failed:', lastAttemptError);
-          throw new Error('Failed to parse any valid JSON from AI response');
-        }
-      }
-    }
-    
-    return extractedJson;
+    console.log('[DEBUG] Combined validation/extraction result:', JSON.stringify(result.object, null, 2));
+    return result.object;
   } catch (error) {
     console.error('[DEBUG] Error in combined validation/extraction:', error);
-    throw error;
+    return {
+      isInvoice: false,
+      error: error instanceof Error ? error.message : "Failed to process invoice"
+    };
   }
 }
 
-// Update the processInvoiceImplementation to use the combined function
+// Update the processInvoiceImplementation to be a simple async function
 export async function processInvoiceImplementation({ 
   fileContent, 
   fileType, 
   fileName, 
-  updateIfExists = false,
-  dataStream
-}: z.infer<typeof processInvoiceSchema> & { dataStream?: DataStreamWriter }) {
+  updateIfExists = false
+}: z.infer<typeof processInvoiceSchema>) {
   try {
     console.log('[DEBUG] Starting invoice processing for file:', fileName);
     console.log('[DEBUG] File type:', fileType);
@@ -148,33 +258,32 @@ export async function processInvoiceImplementation({
     if (!result.isInvoice) {
       console.log('[DEBUG] Document validation failed - not an invoice');
       return {
+        success: false,
         error: result.error || "The uploaded document does not appear to be an invoice."
+      };
+    }
+    
+    if (!result.invoiceData) {
+      console.log('[DEBUG] No invoice data extracted');
+      return {
+        success: false,
+        error: "Failed to extract invoice data from the document."
       };
     }
     
     // Clean and normalize the extracted data
     console.log('[DEBUG] Starting data cleaning...');
-    const cleanedData = cleanInvoiceData(result.data);
+    const cleanedData = cleanInvoiceData(result.invoiceData);
     console.log('[DEBUG] Cleaned data:', JSON.stringify(cleanedData, null, 2));
-    
-    // Apply fallback values for missing fields
-    const processedData = {
-      customerName: cleanedData.customerName || 'Unknown Customer',
-      vendorName: cleanedData.vendorName || 'Unknown Vendor',
-      invoiceNumber: cleanedData.invoiceNumber || `INV-${Date.now()}`,
-      invoiceDate: cleanedData.invoiceDate || new Date().toISOString().split('T')[0],
-      dueDate: cleanedData.dueDate,
-      amount: cleanedData.amount !== undefined && cleanedData.amount !== null ? cleanedData.amount : 0,
-      lineItems: cleanedData.lineItems || [],
-    };
     
     // Validate extracted data
     console.log('[DEBUG] Validating processed data...');
-    const validationResult = invoiceDataSchema.safeParse(processedData);
+    const validationResult = invoiceDataSchema.safeParse(cleanedData);
     
     if (!validationResult.success) {
       console.error('[DEBUG] Validation error:', validationResult.error.format());
       return {
+        success: false,
         error: "Failed to extract valid invoice data. Please check the document and try again.",
         details: validationResult.error.format()
       };
@@ -182,115 +291,110 @@ export async function processInvoiceImplementation({
     
     const invoiceData = validationResult.data;
     
-    // Save file to disk
-    console.log('[DEBUG] Saving file to disk...');
-    const filePath = await saveFileFromBase64(fileContent, fileName);
-    console.log('[DEBUG] File saved to:', filePath);
-    
-    // Check if invoice with the same invoice number already exists
-    console.log('[DEBUG] Checking for duplicate invoice...');
-    const existingInvoice = await findDuplicateInvoice({
-      invoiceNumber: invoiceData.invoiceNumber,
-      vendorName: invoiceData.vendorName
-    });
-    
-    if (existingInvoice) {
-      console.log('[DEBUG] Duplicate invoice detected:', invoiceData.invoiceNumber);
-      if (updateIfExists) {
-        console.log('[DEBUG] Updating existing invoice:', existingInvoice.id);
-        // Update the existing invoice
-        await updateInvoice({
-          id: existingInvoice.id,
-          customerName: invoiceData.customerName,
-          vendorName: invoiceData.vendorName,
-          invoiceNumber: invoiceData.invoiceNumber,
-          invoiceDate: invoiceData.invoiceDate,
-          dueDate: invoiceData.dueDate,
-          amount: invoiceData.amount,
-        });
-        
-        // Delete existing line items
-        await deleteLineItemsByInvoiceId({ invoiceId: existingInvoice.id });
-        
-        // Add new line items if available
-        if (invoiceData.lineItems && invoiceData.lineItems.length > 0) {
-          await saveLineItems({
-            invoiceId: existingInvoice.id,
-            items: invoiceData.lineItems,
+    try {
+      // Save file to disk
+      console.log('[DEBUG] Saving file to disk...');
+      const filePath = await saveFileFromBase64(fileContent, fileName);
+      console.log('[DEBUG] File saved to:', filePath);
+      
+      // Check if invoice with the same invoice number already exists
+      console.log('[DEBUG] Checking for duplicate invoice...');
+      const existingInvoice = await findDuplicateInvoice({
+        invoiceNumber: invoiceData.invoiceNumber,
+        vendorName: invoiceData.vendorName
+      });
+      
+      if (existingInvoice) {
+        console.log('[DEBUG] Duplicate invoice detected:', invoiceData.invoiceNumber);
+        if (updateIfExists) {
+          console.log('[DEBUG] Updating existing invoice:', existingInvoice.id);
+          // Update the existing invoice
+          await updateInvoice({
+            id: existingInvoice.id,
+            customerName: invoiceData.customerName,
+            vendorName: invoiceData.vendorName,
+            invoiceNumber: invoiceData.invoiceNumber,
+            invoiceDate: invoiceData.invoiceDate,
+            dueDate: invoiceData.dueDate,
+            amount: invoiceData.amount,
           });
+          
+          // Delete existing line items
+          await deleteLineItemsByInvoiceId({ invoiceId: existingInvoice.id });
+          
+          // Add new line items if available
+          if (invoiceData.lineItems && invoiceData.lineItems.length > 0) {
+            await saveLineItems({
+              invoiceId: existingInvoice.id,
+              items: invoiceData.lineItems,
+            });
+          }
+          
+          const updatedInvoice = {
+            id: existingInvoice.id,
+            ...invoiceData
+          };
+          
+          return {
+            success: true,
+            message: "Invoice updated successfully",
+            invoice: updatedInvoice
+          };
+        } else {
+          return {
+            success: false,
+            error: "Duplicate invoice",
+            message: `An invoice with the number ${invoiceData.invoiceNumber} from vendor ${invoiceData.vendorName} already exists.`,
+            existingInvoice
+          };
         }
-        
-        const updatedInvoice = {
-          id: existingInvoice.id,
-          ...invoiceData
-        };
-
-        // Write to data stream if available
-        if (dataStream) {
-          dataStream.writeData({
-            type: 'invoice-processed',
-            content: updatedInvoice
-          });
-        }
-        
-        return {
-          success: true,
-          message: "Invoice updated successfully",
-          invoice: updatedInvoice
-        };
-      } else {
-        return {
-          error: "Duplicate invoice",
-          message: `An invoice with the number ${invoiceData.invoiceNumber} from vendor ${invoiceData.vendorName} already exists.`,
-          existingInvoice
-        };
       }
-    }
-    
-    // Save invoice to database
-    console.log('[DEBUG] Saving new invoice to database...');
-    const { id: invoiceId } = await saveInvoice({
-      customerName: invoiceData.customerName,
-      vendorName: invoiceData.vendorName,
-      invoiceNumber: invoiceData.invoiceNumber,
-      invoiceDate: invoiceData.invoiceDate,
-      dueDate: invoiceData.dueDate,
-      amount: invoiceData.amount,
-      filePath,
-    });
-    console.log('[DEBUG] Invoice saved with ID:', invoiceId);
-    
-    // Save line items if available
-    if (invoiceData.lineItems && invoiceData.lineItems.length > 0) {
-      console.log('[DEBUG] Saving line items...');
-      await saveLineItems({
-        invoiceId,
-        items: invoiceData.lineItems,
+      
+      // Save invoice to database
+      console.log('[DEBUG] Saving new invoice to database...');
+      const { id: invoiceId } = await saveInvoice({
+        customerName: invoiceData.customerName,
+        vendorName: invoiceData.vendorName,
+        invoiceNumber: invoiceData.invoiceNumber,
+        invoiceDate: invoiceData.invoiceDate,
+        dueDate: invoiceData.dueDate,
+        amount: invoiceData.amount,
+        filePath,
       });
-      console.log('[DEBUG] Line items saved successfully');
+      console.log('[DEBUG] Invoice saved with ID:', invoiceId);
+      
+      // Save line items if available
+      if (invoiceData.lineItems && invoiceData.lineItems.length > 0) {
+        console.log('[DEBUG] Saving line items...');
+        await saveLineItems({
+          invoiceId,
+          items: invoiceData.lineItems,
+        });
+        console.log('[DEBUG] Line items saved successfully');
+      }
+      
+      const newInvoice = {
+        id: invoiceId,
+        ...invoiceData
+      };
+      
+      return {
+        success: true,
+        message: "Invoice processed successfully",
+        invoice: newInvoice
+      };
+    } catch (dbError) {
+      console.error('[DEBUG] Database operation error:', dbError);
+      return {
+        success: false,
+        error: "Failed to save invoice data",
+        details: dbError instanceof Error ? dbError.message : String(dbError)
+      };
     }
-    
-    const newInvoice = {
-      id: invoiceId,
-      ...invoiceData
-    };
-
-    // Write to data stream if available
-    if (dataStream) {
-      dataStream.writeData({
-        type: 'invoice-processed',
-        content: newInvoice
-      });
-    }
-    
-    return {
-      success: true,
-      message: "Invoice processed successfully",
-      invoice: newInvoice
-    };
   } catch (error) {
     console.error('[DEBUG] Error processing invoice:', error);
     return {
+      success: false,
       error: "Failed to process invoice",
       details: error instanceof Error ? error.message : String(error)
     };
@@ -302,76 +406,65 @@ function cleanInvoiceData(data: any) {
   console.log('[DEBUG] Starting data cleaning process');
   const cleaned: any = { ...data };
   
-  // Clean amount: ensure it's a number and not zero unless explicitly set
-  if (typeof cleaned.amount === 'string') {
-    // Remove currency symbols and commas
-    const amountStr = cleaned.amount.replace(/[$,£€]/g, '').trim();
-    cleaned.amount = parseFloat(amountStr) || 1.0; // Default to 1.0 if parsing fails
-  } else if (cleaned.amount === 0 || cleaned.amount === null || cleaned.amount === undefined) {
-    // If amount is 0, null, or undefined, set a reasonable default
-    cleaned.amount = 1.0;
+  // Clean amount using international format parser
+  if (typeof cleaned.amount === 'string' || typeof cleaned.amount === 'number') {
+    cleaned.amount = parseInternationalAmount(cleaned.amount);
+  } else {
+    cleaned.amount = 0;
   }
   
-  // Clean dates: ensure they're in YYYY-MM-DD format
+  // Clean dates using international format parser
   if (cleaned.invoiceDate) {
-    try {
-      // Try to parse and format the date
-      const date = new Date(cleaned.invoiceDate);
-      if (!isNaN(date.getTime())) {
-        cleaned.invoiceDate = date.toISOString().split('T')[0];
-      } else {
-        // If parsing fails, use current date
-        cleaned.invoiceDate = new Date().toISOString().split('T')[0];
-      }
-    } catch (e) {
-      cleaned.invoiceDate = new Date().toISOString().split('T')[0];
-    }
+    cleaned.invoiceDate = parseInternationalDate(cleaned.invoiceDate);
+  } else {
+    cleaned.invoiceDate = new Date().toISOString().split('T')[0];
   }
   
   if (cleaned.dueDate) {
-    try {
-      const date = new Date(cleaned.dueDate);
-      if (!isNaN(date.getTime())) {
-        cleaned.dueDate = date.toISOString().split('T')[0];
-      }
-    } catch (e) {
-      // If due date is invalid, set it to 30 days from invoice date
-      if (cleaned.invoiceDate) {
-        const invoiceDate = new Date(cleaned.invoiceDate);
-        invoiceDate.setDate(invoiceDate.getDate() + 30);
-        cleaned.dueDate = invoiceDate.toISOString().split('T')[0];
-      }
-    }
+    cleaned.dueDate = parseInternationalDate(cleaned.dueDate);
   }
   
-  // Clean line items: ensure they have the required properties and correct types
+  // Ensure addresses are properly formatted strings
+  cleaned.customerAddress = cleaned.customerAddress ? cleaned.customerAddress.trim() : '';
+  cleaned.vendorAddress = cleaned.vendorAddress ? cleaned.vendorAddress.trim() : '';
+  
+  // Clean line items with international format support
   if (Array.isArray(cleaned.lineItems) && cleaned.lineItems.length > 0) {
     cleaned.lineItems = cleaned.lineItems.map((item: any) => {
-      // Helper function to convert string numbers to actual numbers
-      const toNumber = (value: any): number => {
-        if (typeof value === 'number') return value;
-        if (typeof value === 'string') {
-          const num = parseFloat(value.replace(/[$,£€]/g, '').trim());
-          return isNaN(num) ? 0 : num;
-        }
-        return 0;
-      };
-
+      // Extract service ID if present in description
+      const serviceIdMatch = item.description?.match(/(?:Dienst|Service):\s*([A-Z0-9_]+)/i);
+      const serviceId = serviceIdMatch ? serviceIdMatch[1] : undefined;
+      
+      // Extract and clean service period
+      const { description, servicePeriod } = extractServicePeriod(item.description || '');
+      
       return {
-        description: item.description || 'Unspecified item',
-        quantity: toNumber(item.quantity) || 1,
-        unitPrice: toNumber(item.unitPrice),
-        total: toNumber(item.total),
+        description: description || 'Unspecified item',
+        quantity: item.quantity || 1,
+        unitPrice: parseInternationalAmount(item.unitPrice || 0),
+        total: parseInternationalAmount(item.total || 0),
+        serviceId,
+        servicePeriod
       };
     });
   } else if (!cleaned.lineItems || cleaned.lineItems.length === 0) {
-    // If no line items, create a default one based on the total amount
+    // Create default line item based on total amount
     cleaned.lineItems = [{
       description: 'Invoice total',
       quantity: 1,
       unitPrice: cleaned.amount,
-      total: cleaned.amount,
+      total: cleaned.amount
     }];
+  }
+  
+  // Ensure contract number is a string if present
+  if (cleaned.contractNumber) {
+    cleaned.contractNumber = cleaned.contractNumber.toString().trim();
+  }
+  
+  // Set default currency if not present
+  if (!cleaned.currency) {
+    cleaned.currency = '€'; // Default to EUR since we're handling European invoices
   }
   
   console.log('[DEBUG] Data cleaning completed');
