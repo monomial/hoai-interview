@@ -6,7 +6,7 @@ import {
   updateInvoice,
   deleteLineItemsByInvoiceId
 } from '@/lib/db/queries';
-import { tool, generateText, type DataStreamWriter, generateObject } from 'ai';
+import { tool, generateObject } from 'ai';
 import { z } from 'zod';
 import { anthropic } from '@ai-sdk/anthropic';
 
@@ -146,137 +146,97 @@ const invoiceModel = anthropic('claude-3-7-sonnet-20250219');
 
 // Define the tool parameters schema
 const processInvoiceSchema = z.object({
-  fileContent: z.string().describe('Base64 encoded file content'),
   fileType: z.string().describe('MIME type of the file'),
   fileName: z.string().describe('Name of the file'),
+  invoiceNumber: z.string().describe('Invoice number'),
+  customerName: z.string().describe('Full name of the customer'),
+  customerAddress: z.string().describe('Complete address of the customer'),
+  vendorName: z.string().describe('Full name of the vendor'),
+  vendorAddress: z.string().describe('Complete address of the vendor'),
+  invoiceDate: z.string().describe('Issue date of the invoice'),
+  dueDate: z.string().optional().describe('Due date of the invoice if shown'),
+  amount: z.number().describe('Total amount of the invoice'),
+  currency: z.string().optional().describe('Currency of the invoice (defaults to EUR)'),
+  contractNumber: z.string().optional().describe('Contract number if present'),
+  lineItems: z.array(z.object({
+    description: z.string().describe('Full service description'),
+    quantity: z.number().optional().describe('Quantity if applicable'),
+    unitPrice: z.number().optional().describe('Unit price in original format'),
+    total: z.number().describe('Line item total'),
+    serviceId: z.string().optional().describe('Service ID or reference number'),
+    servicePeriod: z.object({
+      start: z.string().describe('Start date of service period'),
+      end: z.string().describe('End date of service period')
+    }).optional().describe('Service period if applicable')
+  })).optional().describe('Line items if present'),
   updateIfExists: z.boolean().optional().describe('Whether to update the invoice if it already exists')
 });
 
-// Helper function to validate and extract invoice data in a single call
-async function validateAndExtractInvoiceData(fileContent: string, fileType: string) {
-  try {
-    console.log('[DEBUG] Starting combined invoice validation and extraction');
-    
-    // Define the schema for the response
-    const responseSchema = z.object({
-      isInvoice: z.boolean(),
-      language: z.string().optional(),
-      invoiceData: z.object({
-        customerName: z.string(),
-        customerAddress: z.string(),
-        vendorName: z.string(),
-        vendorAddress: z.string(),
-        invoiceNumber: z.string(),
-        invoiceDate: z.string(),
-        amount: z.number(),
-        currency: z.string().optional(),
-        language: z.string().optional(),
-        contractNumber: z.string().optional(),
-        dueDate: z.string().optional(),
-        lineItems: z.array(z.object({
-          description: z.string(),
-          quantity: z.number().optional(),
-          unitPrice: z.number().optional(),
-          total: z.number(),
-          serviceId: z.string().optional(),
-          servicePeriod: z.object({
-            start: z.string(),
-            end: z.string()
-          }).optional()
-        })).optional()
-      }).optional(),
-      error: z.string().optional()
-    });
-
-    const result = await generateObject({
-      model: invoiceModel as any,
-      schema: responseSchema,
-      prompt: `You are an invoice processing specialist with expertise in international invoices. Analyze this ${fileType} document and:
-
-1. First determine the document language and if it is an invoice by looking for key indicators in multiple languages like:
-   - Invoice/Rechnung/Factura/Facture number
-   - Billing/payment details
-   - Line items, charges, or services
-   - Total amount and currency
-   - VAT/Tax/MwSt. information if present
-
-2. If it is an invoice, extract ALL of the following data precisely as shown:
-   - Full company names (both customer and vendor)
-   - Complete addresses (preserve format and international characters)
-   - Invoice number/reference (exact format)
-   - Contract number if present
-   - Issue date (preserve original format)
-   - Currency and amounts (preserve decimal format)
-   - Due date if shown (preserve original format)
-   
-3. For line items, capture:
-   - Full service descriptions
-   - Service IDs or reference numbers (e.g. OUDJQ_strukan)
-   - Service periods or date ranges
-   - Unit prices in original format
-   - Quantities if applicable
-   - Line item totals in original format
-
-4. Pay special attention to:
-   - International date formats (e.g. German: 7. Mai 2014)
-   - European number formats (using comma as decimal)
-   - Service identifiers and contract numbers
-   - Multi-line addresses
-   - Different currency symbols and positions
-
-Base64 ${fileType}: ${fileContent}`
-    });
-    
-    console.log('[DEBUG] Combined validation/extraction result:', JSON.stringify(result.object, null, 2));
-    return result.object;
-  } catch (error) {
-    console.error('[DEBUG] Error in combined validation/extraction:', error);
-    return {
-      isInvoice: false,
-      error: error instanceof Error ? error.message : "Failed to process invoice"
-    };
-  }
-}
-
 // Update the processInvoiceImplementation to be a simple async function
 export async function processInvoiceImplementation({ 
-  fileContent, 
   fileType, 
   fileName, 
+  invoiceNumber,
+  customerName,
+  customerAddress,
+  vendorName,
+  vendorAddress,
+  invoiceDate,
+  dueDate,
+  amount,
+  currency,
+  contractNumber,
+  lineItems,
   updateIfExists = false
 }: z.infer<typeof processInvoiceSchema>) {
   try {
+    // Log all parameters
+    console.log('[DEBUG] Invoice Processing Parameters:', {
+      fileType,
+      fileName,
+      invoiceNumber,
+      customerName,
+      customerAddress,
+      vendorName,
+      vendorAddress,
+      invoiceDate,
+      dueDate,
+      amount,
+      currency,
+      contractNumber,
+      lineItems: lineItems?.map(item => ({
+        description: item.description,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        total: item.total,
+        serviceId: item.serviceId,
+        servicePeriod: item.servicePeriod
+      })),
+      updateIfExists
+    });
+    
     console.log('[DEBUG] Starting invoice processing for file:', fileName);
     console.log('[DEBUG] File type:', fileType);
-    console.log('[DEBUG] File content length:', fileContent.length);
+    console.log('[DEBUG] Invoice number:', invoiceNumber);
     
-    // Use combined validation and extraction
-    console.log('[DEBUG] Starting combined invoice validation and extraction...');
-    const result = await validateAndExtractInvoiceData(fileContent, fileType);
-    console.log('[DEBUG] Combined validation/extraction result:', JSON.stringify(result, null, 2));
-    
-    if (!result.isInvoice) {
-      console.log('[DEBUG] Document validation failed - not an invoice');
-      return {
-        success: false,
-        error: result.error || "The uploaded document does not appear to be an invoice."
-      };
-    }
-    
-    if (!result.invoiceData) {
-      console.log('[DEBUG] No invoice data extracted');
-      return {
-        success: false,
-        error: "Failed to extract invoice data from the document."
-      };
-    }
-    
-    // Clean and normalize the extracted data
+    // Clean and normalize the invoice data
     console.log('[DEBUG] Starting data cleaning...');
-    const cleanedData = cleanInvoiceData(result.invoiceData);
+    const cleanedData = cleanInvoiceData({
+      customerName,
+      customerAddress,
+      vendorName,
+      vendorAddress,
+      invoiceNumber,
+      invoiceDate,
+      dueDate,
+      amount,
+      currency,
+      contractNumber,
+      lineItems
+    });
     console.log('[DEBUG] Cleaned data:', JSON.stringify(cleanedData, null, 2));
     
-    // Validate extracted data
+    // Validate invoice data
     console.log('[DEBUG] Validating processed data...');
     const validationResult = invoiceDataSchema.safeParse(cleanedData);
     
@@ -284,7 +244,7 @@ export async function processInvoiceImplementation({
       console.error('[DEBUG] Validation error:', validationResult.error.format());
       return {
         success: false,
-        error: "Failed to extract valid invoice data. Please check the document and try again.",
+        error: "Failed to validate invoice data. Please check the data and try again.",
         details: validationResult.error.format()
       };
     }
@@ -292,11 +252,6 @@ export async function processInvoiceImplementation({
     const invoiceData = validationResult.data;
     
     try {
-      // Save file to disk
-      console.log('[DEBUG] Saving file to disk...');
-      const filePath = await saveFileFromBase64(fileContent, fileName);
-      console.log('[DEBUG] File saved to:', filePath);
-      
       // Check if invoice with the same invoice number already exists
       console.log('[DEBUG] Checking for duplicate invoice...');
       const existingInvoice = await findDuplicateInvoice({
@@ -359,7 +314,7 @@ export async function processInvoiceImplementation({
         invoiceDate: invoiceData.invoiceDate,
         dueDate: invoiceData.dueDate,
         amount: invoiceData.amount,
-        filePath,
+        filePath: fileName, // Use fileName as filePath since we don't have fileContent
       });
       console.log('[DEBUG] Invoice saved with ID:', invoiceId);
       
@@ -413,17 +368,6 @@ function cleanInvoiceData(data: any) {
     cleaned.amount = 0;
   }
   
-  // Clean dates using international format parser
-  if (cleaned.invoiceDate) {
-    cleaned.invoiceDate = parseInternationalDate(cleaned.invoiceDate);
-  } else {
-    cleaned.invoiceDate = new Date().toISOString().split('T')[0];
-  }
-  
-  if (cleaned.dueDate) {
-    cleaned.dueDate = parseInternationalDate(cleaned.dueDate);
-  }
-  
   // Ensure addresses are properly formatted strings
   cleaned.customerAddress = cleaned.customerAddress ? cleaned.customerAddress.trim() : '';
   cleaned.vendorAddress = cleaned.vendorAddress ? cleaned.vendorAddress.trim() : '';
@@ -473,12 +417,39 @@ function cleanInvoiceData(data: any) {
 
 // Export the implementation function wrapped as a Tool
 export const processInvoice = tool({
-  description: 'Process an invoice document and extract its data',
-  parameters: z.object({
-    fileContent: z.string().describe('Base64 encoded file content'),
-    fileType: z.string().describe('MIME type of the file'),
-    fileName: z.string().describe('Name of the file'),
-    updateIfExists: z.boolean().optional().describe('Whether to update the invoice if it already exists')
-  }),
+  description: `Process an invoice document and extract its data. The tool will:
+
+1. First determine if the document is an invoice by looking for key indicators in multiple languages like:
+   - Invoice/Rechnung/Factura/Facture number
+   - Billing/payment details
+   - Line items, charges, or services
+   - Total amount and currency
+   - VAT/Tax/MwSt. information if present
+
+2. If it is an invoice, extract ALL of the following data precisely as shown:
+   - Full company names (both customer and vendor)
+   - Complete addresses (preserve format and international characters)
+   - Invoice number/reference (exact format)
+   - Contract number if present
+   - Issue date (preserve original format)
+   - Currency and amounts (preserve decimal format)
+   - Due date if shown (preserve original format)
+   
+3. For line items, capture:
+   - Full service descriptions
+   - Service IDs or reference numbers (e.g. OUDJQ_strukan)
+   - Service periods or date ranges
+   - Unit prices in original format
+   - Quantities if applicable
+   - Line item totals in original format
+
+4. Pay special attention to:
+   - International date formats (e.g. German: 7. Mai 2014)
+   - Provide dates in the format YYYY-MM-DD
+   - European number formats (using comma as decimal)
+   - Service identifiers and contract numbers
+   - Multi-line addresses
+   - Different currency symbols and positions`,
+  parameters: processInvoiceSchema,
   execute: processInvoiceImplementation
 });
